@@ -25,14 +25,14 @@ money, and anything that touches the outside world.
 | Fresh context by default | A long session anchors on its own earlier reasoning | One task file per task; the `handoff` skill; reviewers start cold |
 | One agent unless independence or parallelism pays | More agents cost more and coordinate badly | Note 3's ladder; a single reviewer is the only standing second agent |
 | Separation of powers | The thing being judged must not control the judge | Runners do not score themselves; agents may not edit `lab.toml`, bounds or caps |
-| Sealed data | Tuning against the final test makes the final test meaningless | `data/holdout/` is unreadable by rule |
+| Sealed data | Tuning against the final test makes the final test meaningless | `data/holdout/` is off limits by rule (a guard rail; commutate removes the files from the agent's checkout, which is a wall) |
 | Cost-bounded by construction | An unattended loop needs a ceiling that is not a suggestion | Caps on runs, compute, agent calls and dollars; exit code 3 |
 | Boring technology | Files, Git and subprocesses can be debugged by reading them | `labkit` has no dependencies outside Python itself |
 | Decisions are written down | In three months nobody remembers why | `project/decisions/` |
 
 Its Claude Code configuration was also the model for this one: the same three-way split of
-allow, ask and deny rules, a session-start hook that prints status, a stop hook that will not
-let a session finish while its checks fail, and the same four reviewer verdicts.
+allow, ask and deny rules, a session-start hook that prints status, a stop hook that sends
+a session back to work when its checks fail, and the same four reviewer verdicts.
 
 ## What was left out, and what would justify adding it
 

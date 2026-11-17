@@ -8,13 +8,16 @@ import pytest
 from labkit import config
 
 RUNNER = """
-import json, os, sys, time
+import json, os, subprocess, sys, time
 from pathlib import Path
 
 settings = json.loads(Path(os.environ["LAB_CONFIG"]).read_text())
 cfg = settings["config"]
 with open("calls.log", "a") as fh:
     fh.write(json.dumps(cfg) + "\\n")
+if cfg.get("spawn"):
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    Path("child.pid").write_text(str(child.pid))
 if cfg.get("sleep"):
     time.sleep(cfg["sleep"])
 if cfg.get("fail"):
@@ -38,6 +41,7 @@ x = 3
 sleep = 0
 fail = false
 silent = false
+spawn = false
 
 [bounds]
 x = [-10, 10]

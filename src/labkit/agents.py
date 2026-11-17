@@ -19,9 +19,17 @@ from labkit.config import BudgetError, Config, LabError
 
 ENGINES = ("claude", "codex")
 
-CLAUDE_READ_TOOLS = "Read,Grep,Glob,Bash(git diff *),Bash(git log *),Bash(git status *)"
-CLAUDE_WRITE_TOOLS = (
-    CLAUDE_READ_TOOLS + ",Edit,Write,Bash(uv run *),Bash(git add *),Bash(git commit *)"
+# `--tools` decides which tools exist in the session at all. `--allowedTools` only adds to
+# the project's own allow rules, so by itself it cannot make a session read-only.
+CLAUDE_READ_TOOLS = "Read,Grep,Glob"
+CLAUDE_WRITE_TOOLS = "Read,Grep,Glob,Edit,Write,Bash"
+CLAUDE_WRITE_ALLOW = (
+    "Read,Grep,Glob,Edit,Write,"
+    "Bash(uv run pytest *),Bash(uv run ruff *),"
+    # Not all of `lab`: `lab ask` and `lab review` would start further paid agent calls.
+    "Bash(uv run lab run *),Bash(uv run lab runs *),Bash(uv run lab status),"
+    "Bash(uv run lab task *),"
+    "Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git add *),Bash(git commit *)"
 )
 
 
@@ -65,8 +73,11 @@ def build_argv(
             "json",
             "--permission-mode",
             "acceptEdits" if write else "dontAsk",
-            "--allowedTools",
+            "--tools",
             CLAUDE_WRITE_TOOLS if write else CLAUDE_READ_TOOLS,
+            "--allowedTools",
+            CLAUDE_WRITE_ALLOW if write else CLAUDE_READ_TOOLS,
+            "--strict-mcp-config",  # no MCP servers: nothing outside the repository
             "--max-budget-usd",
             str(max_usd),
         ]
@@ -109,13 +120,24 @@ def _parse_claude(stdout: str) -> tuple[bool, str, float | None]:
     return ok, str(data.get("result", "")).strip(), data.get("total_cost_usd")
 
 
+def counted_spend(cfg: Config, records: list[dict]) -> float:
+    """Dollars to hold against the daily cap. A Claude call that ended without reporting a
+    cost (a timeout, a crash) counts at the per-call cap, the most it can have spent.
+    Codex reports no cost at all, so its calls are limited by the call cap only."""
+    worst = cfg.budget("agent_usd_per_call")
+    return sum(
+        worst if r.get("cost_usd") is None and r["engine"] == "claude" else r.get("cost_usd") or 0
+        for r in records
+    )
+
+
 def check_budget(cfg: Config) -> None:
     today = registry.from_today(registry.read(cfg.path("ledger")))
     if len(today) >= cfg.budget("agent_calls_per_day"):
         raise BudgetError(f"daily agent-call cap reached ({len(today)} calls today)")
-    spent = sum(r.get("cost_usd") or 0 for r in today)
+    spent = counted_spend(cfg, today)
     if spent >= cfg.budget("agent_usd_per_day"):
-        raise BudgetError(f"daily agent spend cap reached (${spent:.2f} today)")
+        raise BudgetError(f"daily agent spend cap reached (${spent:.2f} counted today)")
 
 
 def ask(
@@ -141,8 +163,26 @@ def ask(
             model=model,
         )
         started = time.monotonic()
-        code, stdout, stderr = _execute(argv, prompt, cfg.root, timeout)
-        seconds = round(time.monotonic() - started, 1)
+
+        def record(ok: bool, cost: float | None) -> float:
+            seconds = round(time.monotonic() - started, 1)
+            entry = {
+                "time": registry.now(),
+                "engine": engine,
+                "purpose": purpose,
+                "write": write,
+                "ok": ok,
+                "seconds": seconds,
+                "cost_usd": cost,
+            }
+            registry.append(cfg.path("ledger"), entry)
+            return seconds
+
+        try:
+            code, stdout, stderr = _execute(argv, prompt, cfg.root, timeout)
+        except KeyboardInterrupt:
+            record(False, None)  # an interrupted call may still have spent money
+            raise
         cost = None
         if engine == "claude":
             ok, text, cost = _parse_claude(stdout)
@@ -152,17 +192,5 @@ def ask(
             ok = code == 0 and bool(text)
     if not ok and not text:
         text = _failure_reason(stdout, stderr)
-
-    registry.append(
-        cfg.path("ledger"),
-        {
-            "time": registry.now(),
-            "engine": engine,
-            "purpose": purpose,
-            "write": write,
-            "ok": ok,
-            "seconds": seconds,
-            "cost_usd": cost,
-        },
-    )
+    seconds = record(ok, cost)
     return AgentResult(engine=engine, ok=ok, text=text, seconds=seconds, cost_usd=cost)

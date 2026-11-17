@@ -32,6 +32,7 @@ def glob_digests(root: Path, patterns: list[str]) -> dict[str, str]:
 def run_identity(
     root: Path,
     *,
+    spec: str,
     command: list[str],
     config: dict,
     seed: int,
@@ -41,6 +42,7 @@ def run_identity(
 ) -> tuple[str, dict]:
     """Return (run id, the payload that was hashed)."""
     payload = {
+        "spec": spec,
         "command": command,
         "config": config,
         "seed": seed,

@@ -21,7 +21,8 @@ What makes it work:
   already tried.
 - **A fresh session per task.** Plan in one session, build in another that reads only the
   task file. Long sessions drift.
-- **The stop hook.** Here, Claude cannot finish while lint or tests fail.
+- **The stop hook.** Here, a failing lint or test run sends Claude back to fix it before it
+  finishes, and warns you if it gives up.
 
 ## Rung 2: independent review
 
@@ -57,12 +58,12 @@ What `lab` enforces so the search stays honest and cheap:
 
 | Mechanism | What it prevents |
 |---|---|
-| Identity = hash of command, config, seed, code files, input files | Paying twice for the same run; confusing two runs that differ |
+| Identity = hash of spec id, commands, config, seed, code files, input files | Paying twice for the same run; confusing two runs that differ |
 | `[bounds]` checked first | Spending compute on a config that was never valid |
 | `[screen]` stage | A full run of something a short run already shows is broken |
 | Separate evaluator writes `metrics.json` | The code under test scoring itself |
 | `max_runs` per spec, daily run and compute caps | An unattended loop that never stops |
-| `data/holdout/` unreadable by agents | Tuning against the data meant for the final answer |
+| `data/holdout/` off limits: a rule in `AGENTS.md`, plus Claude Code deny rules for reading it or naming it in a command | Tuning against the data meant for the final answer. This is a guard rail, not a wall; see note 2 |
 | Full logs on disk, short summary to the agent | Filling the agent's context with output |
 
 No language model runs during the experiment itself. You pay an agent to think about results,

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Stop hook: when Python files have changed, lint and tests must pass before Claude finishes.
+"""Stop hook: when Python files have changed, run lint and tests before Claude finishes.
 
-Exit code 2 tells Claude Code to keep working and shows it what was printed to stderr.
+The first failure sends Claude back to work: exit code 2 makes Claude Code continue and
+shows it what was printed to stderr. If the checks still fail when Claude stops again, the
+hook lets it stop, so that a session cannot loop forever, and warns the user instead.
 Standard library only, so it runs before the project environment exists.
 """
 
@@ -22,8 +24,7 @@ def main() -> int:
     except ValueError:
         event = {}
     # Claude is already continuing because of this hook: do not block twice in a row.
-    if event.get("stop_hook_active"):
-        return 0
+    second_attempt = bool(event.get("stop_hook_active"))
 
     root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     status = subprocess.run(
@@ -38,6 +39,10 @@ def main() -> int:
     for command in CHECKS:
         result = subprocess.run(command, cwd=root, capture_output=True, text=True)
         if result.returncode != 0:
+            if second_attempt:
+                warning = f"`{' '.join(command)}` is still failing. The work is not finished."
+                print(json.dumps({"systemMessage": warning}))
+                return 0
             tail = "\n".join((result.stdout + result.stderr).strip().splitlines()[-25:])
             print(
                 f"`{' '.join(command)}` failed. Fix it before finishing, or tell the user "

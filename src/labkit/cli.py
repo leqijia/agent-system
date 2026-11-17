@@ -33,7 +33,7 @@ def cmd_runs(cfg, args) -> int:
     records = registry.read(cfg.path("registry"))
     if args.spec_id:
         records = [r for r in records if r["spec"] == args.spec_id]
-    for r in records[-args.n :]:
+    for r in records[-args.n :] if args.n > 0 else []:
         metrics = ", ".join(f"{k}={v:.5g}" for k, v in sorted(r["metrics"].items()))
         changed = json.dumps(r["config"], sort_keys=True)
         print(
@@ -151,6 +151,9 @@ def main(argv: list[str] | None = None) -> int:
     except LabError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
+    except KeyboardInterrupt:
+        print("interrupted; the command that was running has been stopped", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

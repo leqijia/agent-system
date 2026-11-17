@@ -12,6 +12,12 @@ Everything you can give Claude Code is either **advice** or **enforced**.
 Put preferences in advice. Put anything that must always or never happen in something
 enforced.
 
+Enforced has grades. A permission rule matches the text of a command, so it stops the named
+command and the honest mistake, and it can be sidestepped by a differently worded command
+that does the same thing (a script that deletes files is not `git clean`). Only the sandbox,
+which the operating system applies to every command, is a hard wall. Treat rules as a strong
+guard rail and the sandbox as the wall.
+
 ## The layers
 
 | Layer | Where it lives | What it is for | Kind |
@@ -34,14 +40,22 @@ copying data out of a browser tab → an MCP server.
 
 ## What is set up in this repository
 
-- **Allowed without asking**: `uv run`, `uv sync`, reading Git state, `git add`, `git commit`,
-  switching branches, worktrees.
+- **Allowed without asking**: `uv run pytest`, `uv run ruff`, `uv run lab`, `uv sync`, reading
+  Git state, `git add`, `git commit`, switching branches, worktrees. Other `uv run` commands
+  ask first, because `uv run <anything>` would let any command through.
 - **Always asks**: `uv add`, `uv remove` (a new dependency is your decision).
-- **Refused**: force-push, `git reset --hard`, `git clean`, `sudo`, `pip install`, and reading
-  `.env` files, `data/holdout/` or `~/.ssh/`.
+- **Refused**: force-push in its several spellings, `git reset --hard`, `git clean`, `sudo`,
+  `pip install`, reading `.env` files, `data/holdout/` or `~/.ssh/` with the Read tool, and
+  any shell command that names `data/holdout`.
+- **What those rules do not cover**: code that Claude writes and then runs through an allowed
+  command. A test file could open `data/holdout/` and `uv run pytest` would run it. The rule
+  in `AGENTS.md`, the review step and, if you turn it on, the sandbox cover that gap.
 - **Session-start hook**: runs `lab status` so every session begins knowing the open tasks,
   recent runs and budgets.
-- **Stop hook**: if Python files changed, lint and tests must pass before Claude can finish.
+- **Stop hook**: if Python files changed, lint and tests run when Claude tries to finish. A
+  failure sends Claude back to fix it. It does this once per attempt to stop: if the checks
+  still fail the second time, Claude is allowed to stop and you see a warning that the work
+  is not finished. Blocking forever would trap a session that cannot fix the problem.
 - **Subagent**: `reviewer`, for a second opinion inside a session.
 
 ## Permission modes
@@ -91,8 +105,10 @@ practice. From safest to riskiest:
 3. Turn on the sandbox (`/sandbox`). The operating system then limits which files and network
    addresses commands can reach, so commands inside those limits can run without prompts.
 4. For unattended runs, list exactly what is permitted:
-   `claude -p "..." --permission-mode dontAsk --allowedTools "Read,Grep,Bash(uv run *)"`.
-   `lab ask` and `lab review` do this for you.
+   `claude -p "..." --permission-mode dontAsk --tools "Read,Grep,Glob"`.
+   `--tools` sets which tools exist in the session. `--allowedTools` only adds to the
+   project's allow rules, so it cannot make a session read-only by itself. `lab ask` and
+   `lab review` do this for you.
 5. `--dangerously-skip-permissions`. People who use it responsibly run it inside a container
    or virtual machine that holds nothing they would mind losing and no credentials. On your
    own laptop with your real files, Auto mode gets most of the benefit without the exposure.

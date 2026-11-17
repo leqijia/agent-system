@@ -67,3 +67,7 @@ agent starts with it.
   full list matters.
 - The `codex` on PATH may be much older than the one inside the Codex app, and an old one
   fails with "model is not supported". Check `codex --version` first.
+- `claude -p --allowedTools` adds to the project's allow rules; it does not remove tools. A
+  read-only headless session needs `--tools "Read,Grep,Glob"`.
+- `Bash(uv run *)` in an allow list lets any command through (`uv run git reset --hard`).
+  Allow the specific tools instead.

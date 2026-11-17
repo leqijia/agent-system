@@ -40,16 +40,16 @@ def report(cfg: Config) -> str:
     runs_today = registry.from_today(runs)
     calls_today = registry.from_today(registry.read(cfg.path("ledger")))
     seconds = sum(r.get("seconds", 0) for r in runs_today)
-    spent = sum(r.get("cost_usd") or 0 for r in calls_today)
+    spent = agents.counted_spend(cfg, calls_today)
     lines.append(
         "budget today: "
         f"{len(runs_today)}/{cfg.budget('runs_per_day')} runs, "
         f"{seconds:.0f}/{cfg.budget('compute_seconds_per_day')}s compute, "
         f"{len(calls_today)}/{cfg.budget('agent_calls_per_day')} agent calls, "
-        f"${spent:.2f}/${cfg.budget('agent_usd_per_day'):.2f} measured agent spend"
+        f"${spent:.2f}/${cfg.budget('agent_usd_per_day'):.2f} agent spend"
     )
 
     found = agents.available()
-    engines = ", ".join(f"{name}={'ok' if path else 'missing'}" for name, path in found.items())
-    lines.append(f"engines: {engines}")
+    engines = ", ".join(f"{name}={'yes' if path else 'no'}" for name, path in found.items())
+    lines.append(f"engines on PATH (not tested): {engines}")
     return "\n".join(lines)

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from labkit.config import Config, LabError
 MAX_DIFF_CHARS = 60_000
 VERDICTS = ("accept", "accept_with_caveats", "reject", "cannot_assess")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+# Code comes first in the diff, so that the size limit cuts prose before it cuts code.
+DIFF_ORDER = "*.py\n*.toml\n*.sh\n*.json\n*.yaml\n*.yml\n"
 
 PROMPT = """You are an independent reviewer of a code change in this repository.
 You did not write it, and you have deliberately not been shown the author's explanation.
@@ -65,9 +68,19 @@ def _git(root: Path, *args: str) -> str:
     return out.stdout
 
 
-def collect_change(root: Path, base: str | None) -> tuple[str, str, str]:
+def bookkeeping(cfg: Config) -> list[str]:
+    """Files `lab review` and `lab ask` write themselves. Leaving them out keeps a review
+    from mistaking its own traces for the change."""
+    paths = (cfg.path("ledger"), cfg.path("reviews"))
+    return [p.relative_to(cfg.root).as_posix() for p in paths if p.is_relative_to(cfg.root)]
+
+
+def collect_change(
+    root: Path, base: str | None, ignore: tuple[str, ...] | list[str] = ()
+) -> tuple[str, str, str]:
     """Return (description of what is compared, changed files, diff)."""
-    status = _git(root, "status", "--short", "--untracked-files=all")
+    paths = ["--", ".", *(f":(exclude){path}" for path in ignore)]
+    status = _git(root, "status", "--short", "--untracked-files=all", *paths)
 
     def exists(ref: str) -> bool:
         check = subprocess.run(
@@ -85,8 +98,11 @@ def collect_change(root: Path, base: str | None) -> tuple[str, str, str]:
     else:
         previous = "HEAD~1" if exists("HEAD~1") else EMPTY_TREE
         target, label = [previous, "HEAD"], "the last commit"
-    diff = _git(root, "diff", *target)
-    files = _git(root, "diff", "--stat", *target)
+    with tempfile.NamedTemporaryFile("w", suffix=".order") as order:
+        order.write(DIFF_ORDER)
+        order.flush()
+        diff = _git(root, "diff", f"-O{order.name}", *target, *paths)
+    files = _git(root, "diff", "--stat", *target, *paths)
     if status.strip():
         files += "\nUncommitted or new files (read new files directly):\n" + status
     if len(diff) > MAX_DIFF_CHARS:
@@ -125,7 +141,7 @@ def review(
     check: bool = True,
 ) -> tuple[str, Path]:
     """Run a review, save it under project/reviews/, and return (verdict, saved file)."""
-    label, files, diff = collect_change(cfg.root, base)
+    label, files, diff = collect_change(cfg.root, base, bookkeeping(cfg))
     if not diff and not files:
         raise LabError("nothing to review: no changes found")
 

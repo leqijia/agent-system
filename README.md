@@ -22,7 +22,7 @@ Open a terminal in this folder and run these one at a time.
 
 ```bash
 uv sync                    # install what the project needs into .venv (once)
-uv run pytest -q           # run the tests; you should see "21 passed"
+uv run pytest -q           # run the tests; you should see "35 passed"
 uv run lab status          # where the project stands
 uv run lab run experiments/specs/example-quadratic.toml               # run an experiment
 uv run lab run experiments/specs/example-quadratic.toml               # again: served from cache

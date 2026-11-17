@@ -77,9 +77,19 @@ def apply_overrides(spec: Spec, sets: list[str], seed: int | None = None) -> Non
         spec.seed = seed
 
 
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _bad_limits(limits: object) -> bool:
+    if not isinstance(limits, list) or len(limits) != 2:
+        return True
+    return not all(_is_number(v) for v in limits) or limits[0] > limits[1]
+
+
 def _outside(value: object, limits: list) -> bool:
     low, high = limits
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if not _is_number(value):
         return True
     return not (low <= value <= high)
 
@@ -88,10 +98,15 @@ def validate(spec: Spec) -> list[str]:
     """Cheap checks that run before any compute is spent."""
     problems = []
     for key, limits in spec.bounds.items():
-        if key not in spec.config:
+        if _bad_limits(limits):
+            problems.append(f"[bounds] {key} must be [low, high] with low <= high, got {limits!r}")
+        elif key not in spec.config:
             problems.append(f"[bounds] names '{key}', which is not in [config]")
         elif _outside(spec.config[key], limits):
             problems.append(f"{key}={spec.config[key]!r} is outside allowed range {limits}")
+    for name, limits in ((spec.screen or {}).get("bounds") or {}).items():
+        if _bad_limits(limits):
+            problems.append(f"[screen] bounds.{name} must be [low, high], got {limits!r}")
     return problems
 
 
@@ -120,8 +135,7 @@ def read_metrics(path: Path) -> tuple[dict, str | None]:
     if not isinstance(metrics, dict) or not metrics:
         return {}, "metrics.json must be a non-empty JSON object"
     for name, value in metrics.items():
-        number = isinstance(value, (int, float)) and not isinstance(value, bool)
-        if not number or not math.isfinite(value):
+        if not _is_number(value) or not math.isfinite(value):
             return {}, f"metric '{name}' is not a finite number: {value!r}"
     return metrics, None
 
@@ -154,9 +168,20 @@ def _run_command(command: list[str], *, cwd: Path, env: dict, log, timeout: floa
     try:
         return "ok" if proc.wait(timeout=timeout) == 0 else "failed"
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait()
+        _kill_tree(proc)
         return "timeout"
+    except BaseException:
+        # Ctrl+C does not reach the run (it has its own session), so stop it here.
+        _kill_tree(proc)
+        raise
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
 
 
 def _execute(
@@ -183,7 +208,9 @@ def _execute(
         if status == "ok" and spec.evaluate:
             log.write("\n--- evaluate ---\n")
             log.flush()
-            status = _run_command(spec.evaluate, cwd=cfg.root, env=env, log=log, timeout=timeout)
+            # timeout_s covers the run and its evaluation together.
+            left = max(1.0, timeout - (time.monotonic() - started))
+            status = _run_command(spec.evaluate, cwd=cfg.root, env=env, log=log, timeout=left)
             if status != "ok":
                 note = f"evaluate command {status}"
     seconds = round(time.monotonic() - started, 2)
@@ -223,21 +250,30 @@ def _cached(records: list[dict], run_id: str) -> dict | None:
     return None
 
 
-def _run_stage(cfg: Config, spec: Spec, records: list[dict], *, stage: str) -> dict:
-    config = dict(spec.config)
-    timeout = spec.timeout_s
-    if stage == "screen":
-        config.update(spec.screen.get("overrides", {}))
-        timeout = spec.screen.get("timeout_s", spec.timeout_s)
-    run_id, payload = run_identity(
+def _identity(cfg: Config, spec: Spec, config: dict, stage: str = "full") -> tuple[str, dict]:
+    return run_identity(
         cfg.root,
-        command=spec.command + (spec.evaluate or []),
+        spec=spec.id,
+        command=spec.command + ["--evaluate--"] + (spec.evaluate or []),
         config=config,
         seed=spec.seed,
         code=spec.code,
         inputs=spec.inputs,
         stage=stage,
     )
+
+
+def _screen_config(spec: Spec) -> dict:
+    return {**spec.config, **spec.screen.get("overrides", {})}
+
+
+def _run_stage(cfg: Config, spec: Spec, records: list[dict], *, stage: str) -> dict:
+    config = dict(spec.config)
+    timeout = spec.timeout_s
+    if stage == "screen":
+        config = _screen_config(spec)
+        timeout = spec.screen.get("timeout_s", spec.timeout_s)
+    run_id, payload = _identity(cfg, spec, config, stage)
     hit = _cached(records, run_id)
     if hit:
         return {**hit, "cached": True}
@@ -254,6 +290,21 @@ def _screen_problem(spec: Spec, record: dict) -> str | None:
     return None
 
 
+def _screened_out_before(cfg: Config, spec: Spec, records: list[dict], full_id: str) -> dict | None:
+    """An earlier screened_out verdict that still stands: the screening run is in the cache
+    and, judged by the current [screen] bounds, gives the same reason."""
+    screen_id, _ = _identity(cfg, spec, _screen_config(spec), "screen")
+    screened = _cached(records, screen_id)
+    problem = _screen_problem(spec, screened) if screened else None
+    if not problem:
+        return None
+    for earlier in reversed(records):
+        same = earlier["run_id"] == full_id and earlier["status"] == "screened_out"
+        if same and earlier.get("note") == problem:
+            return earlier
+    return None
+
+
 def run_spec(cfg: Config, spec: Spec) -> dict:
     """Run one experiment end to end and return its registry record."""
     problems = validate(spec)
@@ -261,17 +312,17 @@ def run_spec(cfg: Config, spec: Spec) -> dict:
         raise LabError("invalid config, nothing was run:\n  " + "\n  ".join(problems))
     records = registry.read(cfg.path("registry"))
 
-    full_id, _ = run_identity(
-        cfg.root,
-        command=spec.command + (spec.evaluate or []),
-        config=spec.config,
-        seed=spec.seed,
-        code=spec.code,
-        inputs=spec.inputs,
-    )
+    full_id, _ = _identity(cfg, spec, spec.config)
     hit = _cached(records, full_id)
     if hit:
         return {**hit, "cached": True}
+
+    if spec.screen:
+        # Repeating a config that was already screened out costs nothing: no run, no new
+        # record, nothing taken from max_runs.
+        earlier = _screened_out_before(cfg, spec, records, full_id)
+        if earlier:
+            return {**earlier, "cached": True}
 
     check_budgets(cfg, spec, records)
     if spec.screen:

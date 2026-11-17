@@ -27,13 +27,13 @@ Code's are configured in this repository.
 
 | Guard | Claude Code | Codex |
 |---|---|---|
-| Refusing force-push, `git reset --hard`, `pip install`, reading `data/holdout/` | Enforced by `.claude/settings.json` | Advice only (written in `AGENTS.md`) |
-| Lint and tests must pass before finishing | Enforced by the stop hook | Not enforced. `lab review` runs the tests itself, so a failure still surfaces |
+| Refusing force-push, `git reset --hard`, `pip install`, reading `data/holdout/` | Deny rules in `.claude/settings.json`. They stop the named commands, not every roundabout way of doing the same thing | Advice only (written in `AGENTS.md`) |
+| Lint and tests run before finishing | The stop hook sends Claude back once, then warns you | Nothing. `lab review` runs the tests itself, so a failure still surfaces |
 | `lab status` at session start | Hook | `AGENTS.md` tells it to run the command |
 | Limits on where commands can write | Permission mode, optional sandbox | Sandbox mode: `read-only`, `workspace-write` or `danger-full-access` |
 
 In practice: give Codex the reviewing role and bounded, well-specified tasks, and keep work
-that touches the protected areas in Claude Code, where the limits are enforced.
+that touches the protected areas in Claude Code, where the guard rails exist.
 
 ## Four ways to combine them
 
@@ -99,12 +99,13 @@ uv run lab ask claude --write "Do task T0008; stop when its Done-when command pa
 
 Each call is recorded in `project/ledger.jsonl` and counted against the daily caps in
 `lab.toml`. Claude Code reports what a call cost; Codex does not, so Codex calls are counted
-but not priced.
+but not priced. A Claude call that dies without reporting a cost is counted at the per-call
+cap, the most it can have spent.
 
 Under the hood these are the two tools' own non-interactive commands:
 
 ```bash
-claude -p --output-format json --permission-mode dontAsk --allowedTools "Read,Grep,Glob" --max-budget-usd 2
+claude -p --output-format json --permission-mode dontAsk --tools "Read,Grep,Glob" --strict-mcp-config --max-budget-usd 2
 codex exec --sandbox read-only --cd . -          # the prompt arrives on standard input
 ```
 

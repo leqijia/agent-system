@@ -1,6 +1,10 @@
+import os
+import sys
+import time
+
 import pytest
 
-from labkit import experiment, registry
+from labkit import cli, experiment, registry
 from labkit.config import BudgetError, LabError
 
 
@@ -63,13 +67,44 @@ def test_failed_run_is_recorded_with_log_and_not_cached(project, calls):
     assert calls() == 2
 
 
-def test_timeout_kills_the_run(project):
-    spec = load(project, "sleep=30")
-    spec.timeout_s = 0.5
+def gone(pid: int, wait: float = 5.0) -> bool:
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_timeout_kills_the_run_and_the_processes_it_started(project):
+    spec = load(project, "sleep=30", "spawn=true")
+    spec.timeout_s = 2
     record = experiment.run_spec(project, spec)
 
     assert record["status"] == "timeout"
     assert record["seconds"] < 10
+    assert gone(int((project.root / "child.pid").read_text()))
+
+
+def test_interrupt_stops_the_run_before_it_propagates(project, monkeypatch):
+    spec = load(project, "sleep=30", "spawn=true")
+    real_wait = experiment.subprocess.Popen.wait
+
+    def interrupted(self, timeout=None):
+        if timeout is None:  # the wait after the kill
+            return real_wait(self)
+        deadline = time.monotonic() + 10
+        while not (project.root / "child.pid").is_file() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(experiment.subprocess.Popen, "wait", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        experiment.run_spec(project, spec)
+
+    assert gone(int((project.root / "child.pid").read_text()))
 
 
 def test_exit_zero_without_metrics_is_not_a_success(project):
@@ -112,6 +147,87 @@ def test_screening_pass_then_full_run(project, calls):
     assert record["stage"] == "full"
     assert record["metrics"] == {"loss": 4}
     assert calls() == 2
+
+
+def test_repeating_a_screened_out_config_adds_no_records(project, calls):
+    def attempt():
+        spec = load(project, "x=9")
+        spec.screen = {"overrides": {}, "bounds": {"loss": [0, 50]}}
+        spec.max_runs = 1  # the first verdict uses the only slot; the repeat must not need one
+        return experiment.run_spec(project, spec)
+
+    first, second = attempt(), attempt()
+
+    assert second["cached"] is True
+    assert second["run_id"] == first["run_id"]
+    assert calls() == 1
+    assert len(registry.read(project.path("registry"))) == 2  # screening run + verdict
+
+
+EVALUATOR = """
+import json, os, sys
+from pathlib import Path
+
+settings = json.loads(Path(os.environ["LAB_CONFIG"]).read_text())
+if settings["config"]["x"] < 0:
+    sys.exit("cannot score a negative x")
+out = Path(os.environ["LAB_RUN_DIR"]) / "metrics.json"
+out.write_text(json.dumps({"loss": settings["config"]["x"] + 100}))
+"""
+
+
+def with_evaluator(project, *sets):
+    (project.root / "evaluator.py").write_text(EVALUATOR)
+    spec = load(project, "silent=true", *sets)  # the runner itself writes no score
+    spec.evaluate = [sys.executable, "evaluator.py"]
+    return spec
+
+
+def test_separate_evaluator_writes_the_metrics(project):
+    record = experiment.run_spec(project, with_evaluator(project))
+
+    assert record["status"] == "ok"
+    assert record["metrics"] == {"loss": 103}
+    assert "--- evaluate ---" in experiment.log_tail(project, record)
+
+
+def test_failing_evaluator_fails_the_run(project):
+    record = experiment.run_spec(project, with_evaluator(project, "x=-1"))
+
+    assert record["status"] == "failed"
+    assert record["note"] == "evaluate command failed"
+    assert "cannot score a negative x" in experiment.log_tail(project, record)
+
+
+def test_spec_id_and_evaluator_are_part_of_the_identity(project):
+    base = experiment.run_spec(project, load(project))
+    renamed = load(project)
+    renamed.id = "toy-copy"
+    other_spec = experiment.run_spec(project, renamed)
+    other_evaluator = experiment.run_spec(project, with_evaluator(project, "silent=false"))
+
+    assert "cached" not in other_spec
+    assert len({base["run_id"], other_spec["run_id"], other_evaluator["run_id"]}) == 3
+
+
+@pytest.mark.parametrize("limits", [[5], [10, -10], ["a", "b"], 3])
+def test_malformed_bounds_are_reported_not_crashed_on(project, calls, limits):
+    spec = load(project)
+    spec.bounds = {"x": limits}
+    with pytest.raises(LabError, match="must be \\[low, high\\]"):
+        experiment.run_spec(project, spec)
+    assert calls() == 0
+
+
+def test_runs_command_prints_only_the_last_n(project, monkeypatch, capsys):
+    for x in (1, 2, 3):
+        experiment.run_spec(project, load(project, f"x={x}"))
+    monkeypatch.chdir(project.root)
+
+    assert cli.main(["runs", "-n", "2"]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 2
+    assert cli.main(["runs", "-n", "0"]) == 0
+    assert capsys.readouterr().out == ""
 
 
 def test_best_run_respects_direction(project):

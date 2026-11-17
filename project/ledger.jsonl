@@ -1,2 +1,7 @@
 {"cost_usd": 0.2415688, "engine": "claude", "ok": true, "purpose": "ask", "seconds": 3.0, "time": "2026-11-16T22:16:43-08:00", "write": false}
 {"cost_usd": null, "engine": "codex", "ok": false, "purpose": "ask", "seconds": 8.6, "time": "2026-11-16T22:16:52-08:00", "write": false}
+{"cost_usd": null, "engine": "codex", "ok": false, "purpose": "review adhoc", "seconds": 9.2, "time": "2026-11-16T22:29:06-08:00", "write": false}
+{"cost_usd": 1.5557247999999997, "engine": "claude", "ok": true, "purpose": "review adhoc", "seconds": 79.4, "time": "2026-11-16T22:30:26-08:00", "write": false}
+{"cost_usd": 0.0423726, "engine": "claude", "ok": true, "purpose": "ask", "seconds": 9.5, "time": "2026-11-16T22:39:22-08:00", "write": false}
+{"cost_usd": null, "engine": "codex", "ok": false, "purpose": "review adhoc", "seconds": 8.8, "time": "2026-11-16T22:40:29-08:00", "write": false}
+{"cost_usd": 0.335262, "engine": "claude", "ok": true, "purpose": "review adhoc", "seconds": 51.6, "time": "2026-11-16T22:41:21-08:00", "write": false}

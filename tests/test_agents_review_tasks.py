@@ -17,10 +17,19 @@ def argv(engine, write):
 def test_claude_is_read_only_unless_write_is_requested():
     read, write = argv("claude", False), argv("claude", True)
 
+    # `--tools` is what removes Bash, Edit and Write from the session. `--allowedTools`
+    # alone would only add to the project's allow rules, which include `uv run`.
+    assert read[read.index("--tools") + 1] == "Read,Grep,Glob"
+    assert read[read.index("--allowedTools") + 1] == "Read,Grep,Glob"
     assert read[read.index("--permission-mode") + 1] == "dontAsk"
-    assert "Edit" not in read[read.index("--allowedTools") + 1]
+    assert "--strict-mcp-config" in read
+    assert {"Edit", "Write", "Bash"} <= set(write[write.index("--tools") + 1].split(","))
+    shell = [r for r in write[write.index("--allowedTools") + 1].split(",") if "Bash" in r]
+    assert "Bash(uv run lab run *)" in shell
+    # No blanket `uv run`, and no `lab ask` or `lab review`, which would start paid calls.
+    blanket = ("(uv run *)", "(uv run lab *)")
+    assert not [r for r in shell if r.endswith(blanket) or "lab ask" in r or "lab review" in r]
     assert write[write.index("--permission-mode") + 1] == "acceptEdits"
-    assert "Edit" in write[write.index("--allowedTools") + 1]
     assert read[read.index("--max-budget-usd") + 1] == "2.0"
 
 
@@ -82,6 +91,30 @@ def test_ask_records_cost_in_the_ledger_and_enforces_the_daily_cap(project, monk
         agents.ask(project, "claude", "hi", purpose="test")
 
 
+def test_a_claude_call_that_reports_no_cost_counts_at_the_per_call_cap(project, monkeypatch):
+    monkeypatch.setattr(agents, "_execute", lambda *a: (124, "", "timed out after 900s"))
+    project.data["budgets"]["agent_usd_per_call"] = 2.0
+    project.data["budgets"]["agent_usd_per_day"] = 3.0
+
+    assert not agents.ask(project, "claude", "hi", purpose="test").ok  # counted as $2
+    assert not agents.ask(project, "codex", "hi", purpose="test").ok  # Codex has no cost
+    agents.ask(project, "claude", "hi", purpose="test")  # $2 < $3, still allowed
+    with pytest.raises(BudgetError, match="spend cap"):
+        agents.ask(project, "claude", "hi", purpose="test")
+
+
+def test_an_interrupted_call_is_still_written_to_the_ledger(project, monkeypatch):
+    def interrupted(*args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(agents, "_execute", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        agents.ask(project, "claude", "hi", purpose="test")
+
+    (entry,) = registry.read(project.path("ledger"))
+    assert entry["ok"] is False and entry["cost_usd"] is None
+
+
 def test_parse_verdict():
     reply = "VERDICT: accept_with_caveats\n\nFINDINGS:\n- none"
     assert review.parse_verdict(reply) == "accept_with_caveats"
@@ -116,6 +149,41 @@ def test_review_sends_requirements_diff_and_own_evidence(project, monkeypatch):
     assert "3 passed" in prompt
     assert task_path.name in prompt  # new, untracked files are listed for the reviewer
     assert "**reject**" in saved.read_text()
+
+
+def committed_change(root):
+    git(root, "init", "-q")
+    git(root, "config", "user.email", "t@example.com")
+    git(root, "config", "user.name", "t")
+    (root / "notes.md").write_text("first\n")
+    (root / "zebra.py").write_text("stripes = 1\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "first")
+    (root / "notes.md").write_text("second\n")
+    (root / "zebra.py").write_text("stripes = 2\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "second")
+
+
+def test_a_second_review_still_sees_the_commit_not_its_own_bookkeeping(project, monkeypatch):
+    committed_change(project.root)
+    engine = fake_claude("VERDICT: accept\n\nFINDINGS:\n- none")
+    monkeypatch.setattr(agents, "_execute", engine)
+
+    for _ in range(2):  # the first review leaves a ledger entry and a saved review behind
+        _, saved = review.review(project, engine="claude", check=False)
+
+    assert "stripes = 2" in engine.prompts[1]
+    assert "ledger.jsonl" not in engine.prompts[1]
+    assert "Compared: the last commit" in saved.read_text()
+
+
+def test_diff_puts_code_before_prose(project):
+    committed_change(project.root)
+
+    _, _, diff = review.collect_change(project.root, None)
+
+    assert diff.index("zebra.py") < diff.index("notes.md")
 
 
 def test_tasks_are_numbered_listed_and_updated(project):
