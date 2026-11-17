@@ -1,0 +1,19 @@
+# Settings for the `lab` command. This file also marks the project root.
+# Agents must not edit this file: caps are a human decision.
+
+[budgets]
+runs_per_day = 200              # experiment runs, all specs together
+compute_seconds_per_day = 14400 # 4 hours of experiment wall-clock time
+agent_calls_per_day = 40        # headless `lab ask` / `lab review` calls
+agent_usd_per_day = 10.0        # measured spend (Claude reports cost; Codex does not)
+agent_usd_per_call = 2.0        # passed to `claude -p --max-budget-usd`
+
+[check]
+# The command `lab review` runs itself to produce evidence for the reviewer.
+command = ["uv", "run", "pytest", "-q"]
+timeout_s = 600
+
+[engines]
+implementer = "claude"  # who usually writes the code
+reviewer = "codex"      # who reviews it; falls back to the other engine if not installed
+timeout_s = 900

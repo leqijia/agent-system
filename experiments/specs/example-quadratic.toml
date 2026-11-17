@@ -1,0 +1,32 @@
+# A tiny, fast example of an experiment spec. Copy it to start a real one.
+# Run it:   uv run lab run experiments/specs/example-quadratic.toml
+# Try one:  uv run lab run experiments/specs/example-quadratic.toml --set lr=0.3
+
+id = "example-quadratic"
+command = ["python", "experiments/runners/quadratic.py"]     # produces raw output
+evaluate = ["python", "experiments/evaluators/quadratic.py"] # turns output into metrics.json
+seed = 0
+timeout_s = 60
+
+# Files whose content is part of the run's identity. Change one and the cache is bypassed.
+code = ["experiments/runners/quadratic.py", "experiments/evaluators/quadratic.py"]
+inputs = []
+
+primary_metric = "loss"
+direction = "min"
+max_runs = 30   # the search budget for this spec; only a human raises it
+
+[config]
+lr = 0.1
+steps = 200
+
+# Checked before anything runs. Out-of-range values are rejected for free.
+[bounds]
+lr = [0.0001, 2.0]
+steps = [1, 100000]
+
+# A cheap first pass. If it fails or lands outside these bounds, the full run is skipped.
+[screen]
+overrides = { steps = 5 }
+timeout_s = 10
+bounds = { loss = [0.0, 1000000.0] }

@@ -1,0 +1,33 @@
+[project]
+name = "labkit"
+version = "0.1.0"
+description = "A thin, durable layer for agent-driven research: experiment identity, artifacts, budgets and independent review."
+readme = "README.md"
+authors = [
+    { name = "Rocky", email = "leqijia@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+lab = "labkit.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.5",
+]

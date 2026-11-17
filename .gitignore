@@ -1,0 +1,35 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+# Experiment logs and artifacts (the record of each run is in experiments/registry.jsonl)
+experiments/runs/
+
+# Data stays out of git; the folder itself is kept
+data/*
+!data/holdout/
+data/holdout/*
+!data/holdout/.gitkeep
+
+# Secrets and personal settings
+.env
+.env.*
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Cloned repositories being studied
+reading/
+
+# macOS
+.DS_Store
